@@ -1632,7 +1632,7 @@ class GameController(onj: OnjNamedObject) : ScreenController() {
     fun receiveDeathLink() {
         if (playerLost) return
         curPlayerLives = 0
-        mainTimeline.appendAction(playerDeathTimeline(causedByDeathLink = true).asAction())
+        mainTimeline.appendAction(playerDeathTimeline(true).asAction())
     }
 
     @MainThreadOnly

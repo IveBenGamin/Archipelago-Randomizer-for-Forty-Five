@@ -3,8 +3,6 @@ package com.fourinachamber.fortyfive.archipelago
 import com.badlogic.gdx.Gdx
 import com.fourinachamber.fortyfive.FortyFive
 import com.fourinachamber.fortyfive.game.PermaSaveState
-import com.fourinachamber.fortyfive.game.SaveState
-import com.fourinachamber.fortyfive.game.UserPrefs
 import com.fourinachamber.fortyfive.utils.FortyFiveLogger
 import com.fourinachamber.fortyfive.utils.Timeline
 import com.fourinachamber.fortyfive.screen.general.CenteredDragSource
@@ -19,6 +17,7 @@ import io.github.archipelagomw.events.DeathLinkEvent
 import io.github.archipelagomw.events.LocationInfoEvent
 import io.github.archipelagomw.events.PrintJSONEvent
 import io.github.archipelagomw.events.ReceiveItemEvent
+import io.github.archipelagomw.events.RetrievedEvent
 import io.github.archipelagomw.network.ConnectionResult
 import io.github.archipelagomw.parts.NetworkItem
 import kotlinx.coroutines.*
@@ -70,6 +69,12 @@ object APClient : Client() {
 
     var pendingLenientArea: String? = null
 
+    private var slotCheckRequestId: Int = -1
+    
+    private var pendingSlot: Int = -1
+    
+    private var pendingFirstConnect: Boolean = false
+
     var connectionResultCallback: ((success: Boolean, errorMessage: String?) -> Unit)? = null
 
     val scoutedLocations: ConcurrentHashMap<Long, NetworkItem> = ConcurrentHashMap()
@@ -95,6 +100,7 @@ object APClient : Client() {
         game = GAME_NAME
         itemsHandlingFlags = ItemsHandling.SEND_ITEMS or ItemsHandling.SEND_OWN_ITEMS or ItemsHandling.SEND_STARTING_INVENTORY
         eventManager.registerListener(this)
+        eventManager.registerListener(APDataStorage)
         checkConnectFile()
     }
 
@@ -166,12 +172,16 @@ object APClient : Client() {
     fun onConnectionResult(event: ConnectionResultEvent) {
         if (event.result == ConnectionResult.Success) {
             val slotData = event.getSlotData(Map::class.java) as? Map<String, Any>
-            deathLinkMode = when (val v = slotData?.get("death_link")) {
-                is Number -> v.toInt().coerceIn(0, 2)
-                is Boolean -> if (v) 2 else 0
-                else -> 0
+            val deathLinkOn = when (val v = slotData?.get("death_link")) {
+                is Number -> v.toInt() == 1
+                is Boolean -> v
+                else -> false
             }
-            setDeathLinkEnabled(deathLinkMode > 0)
+            deathLinkMode = if (!deathLinkOn) 0 else when (val v = slotData?.get("death_link_type")) {
+                is Number -> v.toInt().coerceIn(0, 1) + 1  // 0=lenient→1, 1=torture→2
+                else -> 1
+            }
+            setDeathLinkEnabled(deathLinkOn)
             obscuredChoices = when (val v = slotData?.get("obscured_choices")) {
                 is Number -> v.toInt() == 1
                 is Boolean -> v
@@ -186,30 +196,10 @@ object APClient : Client() {
                 is Number -> v.toInt()
                 else -> 0
             }
-            val newSeed = when (val s = slotData?.get("seed")) {
-                is String -> s
-                is Number -> s.toString()
-                else -> null
-            }
-            val storedSeed = APSeedCache.readSeed()
-            FortyFiveLogger.debug(logTag, "connected to Archipelago as slot ${event.slot}")
-            val firstConnect = !isArchipelago
-            isArchipelago = true
-            val locationIds = ArrayList(ItemsAndLocations.LOCATIONS.values)
-            scoutLocations(locationIds)
-            if (firstConnect) swapSaveFiles()
-            PermaSaveState.read()
-            SaveState.read()
-            UserPrefs.read()
-            if (newSeed != null && newSeed != storedSeed) {
-                FortyFiveLogger.debug(logTag, "seed changed ($storedSeed -> $newSeed), resetting all")
-                FortyFive.resetAll()
-                APSeedCache.writeSeed(newSeed)
-            }
-            connectionResultCallback?.invoke(true, null)
-            connectionResultCallback = null
-            setGameState(ClientStatus.CLIENT_PLAYING)
-            fullyConnected.complete(Unit)
+            FortyFiveLogger.debug(logTag, "connected to Archipelago as slot ${event.slot}; checking slot occupancy")
+            pendingFirstConnect = !isArchipelago
+            pendingSlot = event.slot
+            slotCheckRequestId = dataStorageGet(listOf("client_status_0_${event.slot}")).getValue() ?: -1
         } else {
             FortyFiveLogger.warn(logTag, "connection failed: ${event.result}")
             val errorMessage = event.result.toString()
@@ -220,6 +210,32 @@ object APClient : Client() {
             waitItemsJob.cancel()
             fullyConnected.cancel()
         }
+    }
+
+    @ArchipelagoEventListener
+    fun onSlotCheckRetrieved(event: RetrievedEvent) {
+        if (event.requestID != slotCheckRequestId) return
+        slotCheckRequestId = -1
+        val status = (event.getObject("client_status_0_$pendingSlot") as? Double)?.toInt() ?: 0
+        if (status == ClientStatus.CLIENT_PLAYING.value) {
+            FortyFiveLogger.warn(logTag, "slot $pendingSlot is already occupied")
+            Gdx.app.postRunnable {
+                connectionResultCallback?.invoke(false, "Another person is already connected on this slot.")
+                connectionResultCallback = null
+            }
+            waitItemsJob.cancel()
+            fullyConnected.cancel()
+            return
+        }
+        isArchipelago = true
+        val locationIds = ArrayList(ItemsAndLocations.LOCATIONS.values)
+        scoutLocations(locationIds)
+        if (pendingFirstConnect) swapSaveFiles()
+        APDataStorage.init(pendingSlot)
+        APDataStorage.fetch()
+        connectionResultCallback?.invoke(true, null)
+        connectionResultCallback = null
+        setGameState(ClientStatus.CLIENT_PLAYING)
     }
 
     @ArchipelagoEventListener
@@ -238,11 +254,11 @@ object APClient : Client() {
                 FortyFiveLogger.debug(logTag, "onItemReceived fired: isArchipelago=$isArchipelago index=${event.index} item=${event.itemName}")
                 if (!isArchipelago) return@launch
                 val index = event.index.toInt()
-                if (index <= PermaSaveState.lastReceivedItemIndex) {
+                if (index in PermaSaveState.receivedItemIndices) {
                     FortyFiveLogger.debug(logTag, "skipping already-processed item at index $index: ${event.itemName}")
                     return@launch
                 }
-                PermaSaveState.lastReceivedItemIndex = index
+                PermaSaveState.addReceivedIndex(index)
                 FortyFiveLogger.debug(logTag, "received item: ${event.itemName} from ${event.playerName} (index $index)")
                 ItemsAndLocations.receiveItem(event.itemName, event.playerName, event.item.flags)
             }
@@ -323,7 +339,6 @@ object APClient : Client() {
 
     override fun onClose(reason: String, attemptingReconnect: Int) {
         FortyFiveLogger.warn(logTag, "connection closed: $reason (reconnect attempt: $attemptingReconnect)")
-        setGameState(ClientStatus.CLIENT_READY)
         Gdx.app.postRunnable {
             connectionResultCallback?.invoke(false, reason)
             connectionResultCallback = null

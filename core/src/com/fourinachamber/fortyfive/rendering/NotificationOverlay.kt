@@ -91,7 +91,7 @@ object NotificationOverlay {
             batch.draw(background, x, 20f, 375f, 110f)
             batch.draw(foreground, x, 25f, 370f, 100f)
             font.data.setScale(0.8f)
-            val layout = GlyphLayout(font, APColors.toMarkup(msg), Color(0x313131ff), 340f, Align.center, true)
+            val layout = GlyphLayout(font, APColors.toMarkup(msg), Color.WHITE, 340f, Align.center, true)
             font.draw(batch, layout, x - REST_X + 10f, 75f + layout.height / 2f)
         }
     }

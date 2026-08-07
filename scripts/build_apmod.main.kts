@@ -9,10 +9,9 @@ val MOD_NEW_FILES = listOf(
     "saves/APCache/default_perma_savefile.onj",
     "saves/APCache/perma_savefile.onj",
     "saves/APCache/savefile.onj",
-    "saves/APCache/seed.onj",
     "saves/APCache/user_prefs.onj",
     "screens/ap_health_check_screen.onj",
-    "textures/notification_foreground.png",
+    "textures/notification_background.png",
     "textures/cards/apItemBullet.png",
     "textures/map/nodes/exit_locked.png",
 )

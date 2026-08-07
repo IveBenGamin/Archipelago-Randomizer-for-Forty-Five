@@ -2,6 +2,7 @@ package com.fourinachamber.fortyfive.game
 
 import com.badlogic.gdx.Gdx
 import com.fourinachamber.fortyfive.archipelago.APClient
+import com.fourinachamber.fortyfive.archipelago.APDataStorage
 import com.fourinachamber.fortyfive.utils.FortyFiveLogger
 import com.fourinachamber.fortyfive.utils.templateParam
 import onj.builder.buildOnjObject
@@ -41,11 +42,14 @@ object PermaSaveState {
             saveFileDirty = true
         }
 
-    var lastReceivedItemIndex: Int = -1
-        set(value) {
-            field = value
-            saveFileDirty = true
-        }
+    var receivedItemIndices: MutableSet<Int> = mutableSetOf()
+
+    val lastReceivedItemIndex: Int get() = receivedItemIndices.maxOrNull() ?: -1
+
+    fun addReceivedIndex(index: Int) {
+        receivedItemIndices.add(index)
+        saveFileDirty = true
+    }
 
     var townsUnlockedCount: Int = 0
         set(value) {
@@ -135,7 +139,9 @@ object PermaSaveState {
         apItemLocations = obj.getOr<OnjArray?>("apItemLocations", null)
             ?.value?.map { it.value as String }?.toMutableList()
             ?: mutableListOf()
-        lastReceivedItemIndex = obj.getOr<Long?>("lastReceivedItemIndex", null)?.toInt() ?: -1
+        receivedItemIndices = obj.getOr<OnjArray?>("receivedItemIndices", null)
+            ?.value?.map { (it.value as Long).toInt() }?.toMutableSet()
+            ?: mutableSetOf()
         townsUnlockedCount = obj.getOr<Long?>("townsUnlockedCount", null)?.toInt() ?: 0
         enemiesDefeated = obj.getOr<Long?>("enemiesDefeated", null)?.toInt() ?: 0
 
@@ -161,12 +167,14 @@ object PermaSaveState {
             if (APClient.isArchipelago) {
                 "apItemLocations" with apItemLocations
                 "lastReceivedItemIndex" with lastReceivedItemIndex
+                "receivedItemIndices" with receivedItemIndices.map { it.toLong() }
                 "townsUnlockedCount" with townsUnlockedCount
                 "enemiesDefeated" with enemiesDefeated
             }
         }
         Gdx.files.local(saveFilePath).file().writeText(obj.toString())
         saveFileDirty = false
+        if (APClient.isArchipelago) APDataStorage.pushPerma()
     }
 
     fun newRun() {
@@ -184,6 +192,24 @@ object PermaSaveState {
         val random = Random(currentRandom)
         repeat(i) { random.nextLong() } // TODO: find better solution
         return random.nextLong()
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun applyFromStorage(data: Map<String, Any>) {
+        fun strings(key: String) = (data[key] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
+        fun int(key: String, def: Int) = (data[key] as? Double)?.toInt() ?: def
+        fun bool(key: String, def: Boolean) = (data[key] as? Boolean) ?: def
+
+        receivedItemIndices = ((data["receivedItemIndices"] as? List<*>)
+            ?.filterIsInstance<Double>()?.map { it.toInt() } ?: emptyList()).toMutableSet()
+        apItemLocations = strings("apItemLocations").toMutableList()
+        townsUnlockedCount = int("townsUnlockedCount", 0)
+        enemiesDefeated = int("enemiesDefeated", 0)
+        collection = strings("collection")
+        playerHasCompletedTutorial = bool("playerHasCompletedTutorial", false)
+        _visitedAreas = strings("visitedAreas").toMutableSet()
+        playerFoughtMultipleEnemies = bool("playerFoughtMultipleEnemies", false)
+        hasSeenInDevPopup = bool("hasSeenInDevPopup", false)
     }
 
     private fun copyDefaultFile() {

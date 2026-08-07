@@ -4,6 +4,7 @@ import com.badlogic.gdx.Gdx
 import com.fourinachamber.fortyfive.FortyFive
 import com.fourinachamber.fortyfive.archipelago.APCardPool
 import com.fourinachamber.fortyfive.archipelago.APClient
+import com.fourinachamber.fortyfive.archipelago.APDataStorage
 import com.fourinachamber.fortyfive.archipelago.ItemsAndLocations
 import com.fourinachamber.fortyfive.map.events.RandomCardSelection
 import com.fourinachamber.fortyfive.utils.FortyFiveLogger
@@ -365,8 +366,32 @@ object SaveState {
         }
         Gdx.files.local(saveFilePath).file().writeText(obj.toString())
         savefileDirty = false
+        if (APClient.isArchipelago) APDataStorage.pushSave()
     }
 
+    @Suppress("UNCHECKED_CAST")
+    fun applyFromStorage(data: Map<String, Any>) {
+        fun strings(key: String) = (data[key] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
+        fun int(key: String, def: Int) = (data[key] as? Double)?.toInt() ?: def
+        fun bool(key: String, def: Boolean) = (data[key] as? Boolean) ?: def
+        fun double(key: String, def: Double) = (data[key] as? Double) ?: def
+
+        _cards = strings("cards").toMutableList()
+        _playerMoney = int("playerMoney", 0)
+        playerLives = int("playerLives", 0)
+        maxPlayerLives = int("maxPlayerLives", 0)
+        currentDifficulty = double("currentDifficulty", 1.0)
+        currentMap = data["currentMap"] as? String ?: ""
+        currentNode = int("currentNode", 0)
+        lastNode = (data["lastNode"] as? Double)?.toInt()
+        totalMoneyEarned = int("totalMoneyEarned", 0)
+        usedReserves = int("usedReserves", 0)
+        enemiesDefeated = int("enemiesDefeated", 0)
+        encountersWon = int("encountersWon", 0)
+        bulletsShot = int("bulletsShot", 0)
+        playerCompletedFirstTutorialEncounter = bool("playerCompletedFirstTutorialEncounter", false)
+        _decks.forEach { it.checkDeck() }
+    }
 
     class Deck(var name: String, val id: Int, private val _cardPositions: MutableMap<Int, String>) {
         val cardPositions: Map<Int, String>
