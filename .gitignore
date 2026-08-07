@@ -13,6 +13,7 @@ assets/large_assets/*
 assets/error_logs/*
 website/out/*
 website/assets/*
+installer/build
 
 ## Java
 
